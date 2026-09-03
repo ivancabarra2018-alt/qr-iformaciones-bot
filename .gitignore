@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+data/
+qr_images/
+assets/
+.env
+*.log
+.DS_Store
