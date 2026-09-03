@@ -738,6 +738,42 @@ async def set_bot_commands(app: Application):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _launch_caffeinate():
+    """Lanza caffeinate en segundo plano para evitar que el Mac duerma."""
+    import subprocess
+    try:
+        proc = subprocess.Popen(
+            ["/usr/bin/caffeinate", "-si"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        logger.info(f"☕ caffeinate activo (PID {proc.pid}) — Mac no dormirá")
+        return proc
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo iniciar caffeinate: {e}")
+        return None
+
+
+async def health_server():
+    """Servidor HTTP mínimo para el health-check de Render."""
+    from aiohttp import web
+    port = int(os.environ.get("PORT", 8080))
+
+    async def handle(_request):
+        return web.Response(text="OK — QR Bot activo ✅")
+
+    app = web.Application()
+    app.router.add_get("/", handle)
+    app.router.add_get("/health", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"🌐 Health server en puerto {port}")
+
+
+
+
 def main():
     """Punto de entrada principal."""
     import asyncio
@@ -747,28 +783,32 @@ def main():
     os.makedirs(QR_OUTPUT_DIR, exist_ok=True)
     os.makedirs(ASSETS_DIR, exist_ok=True)
 
+    # Evitar que el Mac entre en reposo mientras el bot está activo
+    caff_proc = _launch_caffeinate()
+
     logger.info("🚀 Iniciando PingPongElite QR Bot...")
     logger.info(f"📁 Directorio: {os.path.dirname(__file__)}")
 
     async def startup():
-        # Inicializar base de datos
         await init_db()
         logger.info("✅ Base de datos inicializada")
 
-        # Construir aplicación
-        app = build_app()
+        # Health check HTTP server (necesario para Render web_service)
+        try:
+            await health_server()
+        except Exception as e:
+            logger.warning(f"⚠️ Health server no disponible: {e}")
 
-        # Registrar comandos en Telegram
+        app = build_app()
         await app.initialize()
         await set_bot_commands(app)
 
-        # Configurar scheduler
         scheduler = setup_scheduler(app)
         scheduler.start()
         logger.info("✅ Scheduler iniciado")
 
         logger.info("✅ Bot activo y escuchando...")
-        logger.info(f"👉 Abre @PingPongEliteBot en Telegram para probarlo")
+        logger.info("👉 Abre @PingPongEliteBot en Telegram para probarlo")
 
         await app.start()
         await app.updater.start_polling(
@@ -778,11 +818,9 @@ def main():
 
         logger.info("🟢 Bot activo. Ctrl+C para detener.")
 
-        # Mantener el bot vivo hasta señal de parada
-        import asyncio as _asyncio
-        stop_event = _asyncio.Event()
+        stop_event = asyncio.Event()
         try:
-            await stop_event.wait()  # Bloquea hasta KeyboardInterrupt
+            await stop_event.wait()
         except (KeyboardInterrupt, SystemExit):
             pass
         finally:
@@ -796,6 +834,10 @@ def main():
         asyncio.run(startup())
     except KeyboardInterrupt:
         logger.info("🛑 Bot detenido manualmente")
+    finally:
+        if caff_proc:
+            caff_proc.terminate()
+            logger.info("☕ caffeinate detenido")
 
 
 if __name__ == "__main__":
