@@ -26,6 +26,9 @@ from config import (
 )
 from database import init_db, upsert_user
 from handlers.scheduler import setup_scheduler
+from handlers.ai_chat import (
+    cmd_chat, cmd_salir, handle_ai_message, callback_ai_clear
+)
 
 # Handlers de generación
 from handlers.qr_generator import (
@@ -685,6 +688,43 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(callback_pro_menu,      pattern=r"^pro_"))
     app.add_handler(CallbackQueryHandler(callback_gradient_style,pattern=r"^grad:"))
     app.add_handler(CallbackQueryHandler(callback_regen_from_read, pattern=r"^regen_from_read:"))
+    # Callbacks IA
+    app.add_handler(CallbackQueryHandler(callback_ai_clear, pattern=r"^ai_clear"))
+
+    async def _cb_ai_activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        context.user_data["ai_mode"] = True
+        context.user_data["ai_history"] = []
+        await query.edit_message_text(
+            "🤖 *Modo IA activado*\n\n"
+            "Escríbeme cualquier pregunta 👇\n"
+            "_/salir para volver al menú QR_",
+            parse_mode="Markdown"
+        )
+    app.add_handler(CallbackQueryHandler(_cb_ai_activate, pattern=r"^ai_activate"))
+
+    # ── IA Chat ──────────────────────────────────────────────────────────────
+    app.add_handler(CommandHandler("chat",  cmd_chat))
+    app.add_handler(CommandHandler("ia",    cmd_chat))
+    app.add_handler(CommandHandler("salir", cmd_salir))
+
+
+    # Handler global de texto para modo IA (actúa solo cuando ai_mode=True)
+    async def _global_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        handled = await handle_ai_message(update, context)
+        if not handled:
+            # Si no hay acción pendiente y no está en modo IA, sugerir el chat
+            await update.message.reply_text(
+                "💡 Escribe un comando o usa el menú.\n"
+                "🤖 Para chatear con IA escribe /chat",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Menú", callback_data="menu_back"),
+                    InlineKeyboardButton("🤖 Activar IA", callback_data="ai_activate"),
+                ]])
+            )
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _global_text_handler))
 
     # ── Comandos desconocidos ────────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
