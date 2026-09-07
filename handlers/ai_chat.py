@@ -9,7 +9,6 @@ import requests
 logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
 SYSTEM_PROMPT = """Eres un asistente inteligente integrado en @PingPongEliteBot, un bot de Telegram especializado en códigos QR.
 
@@ -27,50 +26,57 @@ Si el usuario pregunta sobre QR, recomienda los comandos del bot cuando sea rele
 MAX_HISTORY = 10  # Mensajes de historial por usuario
 
 
-def _gemini_request(messages: list[dict]) -> str:
-    """Llama a la API de Gemini y devuelve la respuesta."""
-    if not GEMINI_API_KEY:
-        return "⚠️ La IA no está configurada aún. El administrador debe añadir la GEMINI_API_KEY."
+GEMINI_MODELS = [
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-pro-latest",
+]
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-    # Construir contenidos para Gemini
+
+def _gemini_request(messages: list[dict]) -> str:
+    """Llama a la API de Gemini con fallback entre modelos."""
+    if not GEMINI_API_KEY:
+        return "⚠️ La IA no está configurada aún."
+
     contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
-        contents.append({
-            "role": role,
-            "parts": [{"text": msg["content"]}]
-        })
+        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
     payload = {
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_PROMPT}]
-        },
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": contents,
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 500,
-        }
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 500},
     }
 
-    try:
-        resp = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            json=payload,
-            timeout=15
-        )
-        data = resp.json()
-        if "candidates" in data:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        elif "error" in data:
-            logger.error(f"Gemini error: {data['error']}")
-            return f"❌ Error de IA: {data['error'].get('message', 'desconocido')}"
-    except requests.Timeout:
-        return "⏳ La IA tardó demasiado. Intenta de nuevo."
-    except Exception as e:
-        logger.error(f"Gemini exception: {e}")
-        return "❌ Error conectando con la IA. Intenta más tarde."
+    last_err = "Sin respuesta"
+    for model in GEMINI_MODELS:
+        try:
+            resp = requests.post(
+                f"{BASE_URL.format(model=model)}?key={GEMINI_API_KEY}",
+                json=payload, timeout=20
+            )
+            data = resp.json()
+            if "candidates" in data:
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            err_msg = data.get("error", {}).get("message", "?")
+            last_err = err_msg
+            # Si es error de autenticación, no seguir probando
+            if "API_KEY" in err_msg or "401" in str(resp.status_code):
+                return f"❌ Error de clave API: {err_msg}"
+            # Si es alta demanda, probar siguiente modelo
+            logger.warning(f"Modelo {model} no disponible: {err_msg}")
+        except requests.Timeout:
+            last_err = "Timeout"
+            logger.warning(f"Timeout en modelo {model}")
+        except Exception as e:
+            last_err = str(e)
+            logger.error(f"Error en modelo {model}: {e}")
 
-    return "❌ Sin respuesta de la IA."
+    return f"⏳ Los servidores de IA están saturados. Intenta en unos minutos.\n_(Error: {last_err[:80]})_"
+
 
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
