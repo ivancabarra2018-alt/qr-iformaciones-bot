@@ -794,6 +794,25 @@ def _launch_caffeinate():
         return None
 
 
+async def keep_alive_pinger():
+    """Envía pings periódicos para evitar que Render hiberne el bot."""
+    import urllib.request
+    urls = [
+        "https://qr-iformaciones-bot.onrender.com/health",
+        "https://ben-informante-pdf-bot.onrender.com/health"
+    ]
+    await asyncio.sleep(45)
+    while True:
+        for url in urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (AntiSleep/1.0)"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    pass
+            except Exception as e:
+                logger.debug(f"KeepAlive ping error: {e}")
+        await asyncio.sleep(480)  # Ping cada 8 minutos
+
+
 async def health_server():
     """Servidor HTTP mínimo para el health-check de Render."""
     from aiohttp import web
@@ -810,6 +829,9 @@ async def health_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logger.info(f"🌐 Health server en puerto {port}")
+    # Iniciar ping continuo entre bots para evitar reposo
+    asyncio.create_task(keep_alive_pinger())
+
 
 
 
